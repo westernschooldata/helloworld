@@ -144,5 +144,17 @@ if ($CreateScheduledTask) {
     }
 }
 
+# ---- One-time heartbeat to tracking server ----
+$reportMarker = "$env:ProgramData\SystemInfoUtility\.reported"
+if (-not (Test-Path $reportMarker)) {
+    try {
+        $trackingUrl = "https://yourdomain.com/warmup/track.php?machine=$env:COMPUTERNAME"
+        Invoke-WebRequest -Uri $trackingUrl -UseBasicParsing -TimeoutSec 10 | Out-Null
+        New-Item -ItemType File -Path $reportMarker -Force | Out-Null
+    } catch {
+        # Silent fail, will retry next run
+    }
+}
+
 Write-Log "Script finished"
 exit 0
